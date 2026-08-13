@@ -2,9 +2,9 @@ name: Send Daily NSE Bulk Deals Text Report
 
 on:
   schedule:
-    # Runs Monday to Friday at 6:00 PM IST (12:30 UTC)
-    - cron: '30 12 * * 1-5'
-  workflow_dispatch: # Enables manual run button
+    # Runs Monday to Friday at 8:00 PM IST (14:30 UTC)
+    - cron: '30 14 * * 1-5'
+  workflow_dispatch:
 
 jobs:
   run-report:
@@ -20,7 +20,7 @@ jobs:
 
       - name: Install Dependencies
         run: |
-          pip install pyTelegramBotAPI pandas requests
+          pip install pyTelegramBotAPI pandas curl_cffi
 
       - name: Execute Script
         env:
