@@ -15,29 +15,31 @@ bot = telebot.TeleBot(BOT_TOKEN) if BOT_TOKEN else None
 # 1. FETCH LATEST BULK DEALS DATA FROM NSE
 # ==========================================
 def fetch_latest_nse_bulk_deals():
-    """Tries fetching today's bulk deals first. If empty, loops backward day-by-day
-
-    (up to 7 days) to find the latest published bulk deals dataset.
-    """
+    """Fetches bulk deals with cloud-friendly headers and historical endpoint fallback."""
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/120.0.0.0 Safari/537.36"
+            "Chrome/124.0.0.0 Safari/537.36"
         ),
+        "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
         "Accept-Encoding": "gzip, deflate, br",
+        "Referer": "https://www.nseindia.com/report-detail/display-bulk-and-block-deals",
     }
 
     session = requests.Session()
     session.headers.update(headers)
 
     try:
-        session.get("https://www.nseindia.com", timeout=10)
+        # Step A: Warm up session cookies by visiting the main page
+        session.get("https://www.nseindia.com", timeout=12)
 
-        # 1. First attempt: Get today's live bulk deals snapshot
-        live_url = "https://www.nseindia.com/api/snapshot-capital-market-largedeal"
-        response = session.get(live_url, timeout=10)
+        # Step B: Try the primary live snapshot endpoint
+        live_url = (
+            "https://www.nseindia.com/api/snapshot-capital-market-largedeal"
+        )
+        response = session.get(live_url, timeout=12)
 
         if response.status_code == 200:
             json_data = response.json()
@@ -47,32 +49,33 @@ def fetch_latest_nse_bulk_deals():
 
             if bulk_data:
                 df = pd.DataFrame(bulk_data)
-                # Check if data contains today's trades
                 return df, datetime.date.today().strftime("%d-%b-%Y")
 
-        # 2. Fallback: Loop backward up to 7 days to find the latest historical bulk deals
-        print("Live data empty. Checking historical archive for latest available deals...")
+        # Step C: Fallback to historical endpoint if live snapshot is empty/blocked
+        print("Live snapshot empty. Checking historical archive...")
         for i in range(1, 8):
             target_date = datetime.date.today() - datetime.timedelta(days=i)
-            
-            # Skip weekends in search
+
+            # Skip weekends
             if target_date.weekday() >= 5:
                 continue
 
             date_str = target_date.strftime("%d-%m-%Y")
             archive_url = f"https://www.nseindia.com/api/historical/bulk-deals?from={date_str}&to={date_str}"
-            
-            archive_res = session.get(archive_url, timeout=10)
+
+            archive_res = session.get(archive_url, timeout=12)
             if archive_res.status_code == 200:
                 archive_json = archive_res.json()
                 data_list = archive_json.get("data", [])
                 if data_list:
-                    print(f"Found latest bulk deals data for: {date_str}")
-                    return pd.DataFrame(data_list), target_date.strftime("%d-%b-%Y")
+                    print(f"Successfully retrieved data for: {date_str}")
+                    return pd.DataFrame(data_list), target_date.strftime(
+                        "%d-%b-%Y"
+                    )
 
         return None, None
     except Exception as e:
-        print(f"Error fetching data: {e}")
+        print(f"Error fetching data from NSE: {e}")
         return None, None
 
 
