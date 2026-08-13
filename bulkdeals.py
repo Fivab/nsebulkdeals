@@ -1,7 +1,7 @@
 import datetime
 import os
 import pandas as pd
-import requests
+from curl_cffi import requests
 import telebot
 
 # Safely fetch environment variables from GitHub Secrets
@@ -12,47 +12,49 @@ bot = telebot.TeleBot(BOT_TOKEN) if BOT_TOKEN else None
 
 
 # ==========================================
-# 1. FETCH LATEST BULK DEALS DATA FROM NSE
+# 1. FETCH BULK DEALS WITH BROWSER TLS IMPERSONATION
 # ==========================================
 def fetch_latest_nse_bulk_deals():
-    """Fetches bulk deals with cloud-friendly headers and historical endpoint fallback."""
+    """Uses curl_cffi to impersonate Chrome's exact TLS fingerprint,
+
+    bypassing NSE's cloud/datacenter IP blocking.
+    """
+    # Create session impersonating Chrome 120 TLS fingerprint
+    session = requests.Session(impersonate="chrome120")
+
     headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) "
-            "Chrome/124.0.0.0 Safari/537.36"
-        ),
         "Accept": "*/*",
         "Accept-Language": "en-US,en;q=0.9",
-        "Accept-Encoding": "gzip, deflate, br",
         "Referer": "https://www.nseindia.com/report-detail/display-bulk-and-block-deals",
     }
-
-    session = requests.Session()
     session.headers.update(headers)
 
     try:
-        # Step A: Warm up session cookies by visiting the main page
-        session.get("https://www.nseindia.com", timeout=12)
+        # Step A: Establish cookies from main NSE site
+        session.get("https://www.nseindia.com", timeout=15)
 
-        # Step B: Try the primary live snapshot endpoint
+        # Step B: Attempt live snapshot endpoint first
         live_url = (
             "https://www.nseindia.com/api/snapshot-capital-market-largedeal"
         )
-        response = session.get(live_url, timeout=12)
+        res = session.get(live_url, timeout=15)
 
-        if response.status_code == 200:
-            json_data = response.json()
-            bulk_data = json_data.get("BULK_DEALS_DATA", [])
-            if not bulk_data:
-                bulk_data = json_data.get("data", [])
+        if res.status_code == 200:
+            try:
+                json_data = res.json()
+                bulk_data = json_data.get("BULK_DEALS_DATA", [])
+                if not bulk_data:
+                    bulk_data = json_data.get("data", [])
 
-            if bulk_data:
-                df = pd.DataFrame(bulk_data)
-                return df, datetime.date.today().strftime("%d-%b-%Y")
+                if bulk_data:
+                    return pd.DataFrame(bulk_data), datetime.date.today().strftime(
+                        "%d-%b-%Y"
+                    )
+            except Exception:
+                pass
 
-        # Step C: Fallback to historical endpoint if live snapshot is empty/blocked
-        print("Live snapshot empty. Checking historical archive...")
+        # Step C: Fallback to historical endpoint (scanning past 7 trading days)
+        print("Live data empty/blocked. Checking historical archive...")
         for i in range(1, 8):
             target_date = datetime.date.today() - datetime.timedelta(days=i)
 
@@ -63,15 +65,18 @@ def fetch_latest_nse_bulk_deals():
             date_str = target_date.strftime("%d-%m-%Y")
             archive_url = f"https://www.nseindia.com/api/historical/bulk-deals?from={date_str}&to={date_str}"
 
-            archive_res = session.get(archive_url, timeout=12)
+            archive_res = session.get(archive_url, timeout=15)
             if archive_res.status_code == 200:
-                archive_json = archive_res.json()
-                data_list = archive_json.get("data", [])
-                if data_list:
-                    print(f"Successfully retrieved data for: {date_str}")
-                    return pd.DataFrame(data_list), target_date.strftime(
-                        "%d-%b-%Y"
-                    )
+                try:
+                    archive_json = archive_res.json()
+                    data_list = archive_json.get("data", [])
+                    if data_list:
+                        print(f"Successfully retrieved data for: {date_str}")
+                        return pd.DataFrame(data_list), target_date.strftime(
+                            "%d-%b-%Y"
+                        )
+                except Exception:
+                    continue
 
         return None, None
     except Exception as e:
@@ -266,7 +271,7 @@ def send_telegram_message(text_report):
 
 # Execute immediately on run
 if __name__ == "__main__":
-    print("Fetching latest available NSE deals...")
+    print("Fetching latest available NSE deals using Chrome TLS impersonation...")
     df, data_date = fetch_latest_nse_bulk_deals()
     report = process_and_net_deals(df, data_date)
     send_telegram_message(report)
