@@ -12,9 +12,13 @@ bot = telebot.TeleBot(BOT_TOKEN) if BOT_TOKEN else None
 
 
 # ==========================================
-# 1. FETCH DATA FROM NSE
+# 1. FETCH LATEST BULK DEALS DATA FROM NSE
 # ==========================================
-def fetch_nse_bulk_deals():
+def fetch_latest_nse_bulk_deals():
+    """Tries fetching today's bulk deals first. If empty, loops backward day-by-day
+
+    (up to 7 days) to find the latest published bulk deals dataset.
+    """
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -30,19 +34,46 @@ def fetch_nse_bulk_deals():
 
     try:
         session.get("https://www.nseindia.com", timeout=10)
-        url = "https://www.nseindia.com/api/snapshot-capital-market-largedeal"
-        response = session.get(url, timeout=10)
+
+        # 1. First attempt: Get today's live bulk deals snapshot
+        live_url = "https://www.nseindia.com/api/snapshot-capital-market-largedeal"
+        response = session.get(live_url, timeout=10)
 
         if response.status_code == 200:
             json_data = response.json()
             bulk_data = json_data.get("BULK_DEALS_DATA", [])
             if not bulk_data:
                 bulk_data = json_data.get("data", [])
-            return pd.DataFrame(bulk_data)
-        return None
+
+            if bulk_data:
+                df = pd.DataFrame(bulk_data)
+                # Check if data contains today's trades
+                return df, datetime.date.today().strftime("%d-%b-%Y")
+
+        # 2. Fallback: Loop backward up to 7 days to find the latest historical bulk deals
+        print("Live data empty. Checking historical archive for latest available deals...")
+        for i in range(1, 8):
+            target_date = datetime.date.today() - datetime.timedelta(days=i)
+            
+            # Skip weekends in search
+            if target_date.weekday() >= 5:
+                continue
+
+            date_str = target_date.strftime("%d-%m-%Y")
+            archive_url = f"https://www.nseindia.com/api/historical/bulk-deals?from={date_str}&to={date_str}"
+            
+            archive_res = session.get(archive_url, timeout=10)
+            if archive_res.status_code == 200:
+                archive_json = archive_res.json()
+                data_list = archive_json.get("data", [])
+                if data_list:
+                    print(f"Found latest bulk deals data for: {date_str}")
+                    return pd.DataFrame(data_list), target_date.strftime("%d-%b-%Y")
+
+        return None, None
     except Exception as e:
         print(f"Error fetching data: {e}")
-        return None
+        return None, None
 
 
 def find_column(df, possible_names):
@@ -56,9 +87,9 @@ def find_column(df, possible_names):
 # ==========================================
 # 2. PROCESS, CATEGORIZE & SORT DEALS
 # ==========================================
-def process_and_net_deals(df):
+def process_and_net_deals(df, data_date_str):
     if df is None or df.empty:
-        return "⚠️ *No Bulk Deals data found for today.*"
+        return "⚠️ *Unable to retrieve recent NSE Bulk Deals data.*"
 
     symbol_col = find_column(
         df, ["symbol", "bd_symbol", "symbol_name", "ticker"]
@@ -172,8 +203,7 @@ def process_and_net_deals(df):
     buy_list = sorted(buy_list, key=lambda x: x["buy_cr"], reverse=True)
     sell_list = sorted(sell_list, key=lambda x: x["sell_cr"], reverse=True)
 
-    today_str = datetime.date.today().strftime("%d-%b-%Y")
-    report = f"📊 *NSE NETTED BULK DEALS ({today_str})*\n"
+    report = f"📊 *NSE NETTED BULK DEALS ({data_date_str})*\n"
     report += "───────────────────────────\n\n"
 
     # Category 1: NET BUY
@@ -190,7 +220,7 @@ def process_and_net_deals(df):
                 report += f"• *Sellers*: {row['sellers_txt']}\n"
             report += "\n"
     else:
-        report += "_No Net Buy stocks today._\n\n"
+        report += "_No Net Buy stocks found._\n\n"
 
     report += "───────────────────────────\n\n"
 
@@ -210,7 +240,7 @@ def process_and_net_deals(df):
             report += f"• *Sellers*: {row['sellers_txt']}\n"
             report += "\n"
     else:
-        report += "_No Net Sell stocks today._\n"
+        report += "_No Net Sell stocks found._\n"
 
     return report
 
@@ -233,8 +263,8 @@ def send_telegram_message(text_report):
 
 # Execute immediately on run
 if __name__ == "__main__":
-    print("Fetching NSE deals...")
-    df = fetch_nse_bulk_deals()
-    report = process_and_net_deals(df)
+    print("Fetching latest available NSE deals...")
+    df, data_date = fetch_latest_nse_bulk_deals()
+    report = process_and_net_deals(df, data_date)
     send_telegram_message(report)
     print("Process finished successfully.")
